@@ -13,7 +13,7 @@
   <Category>MediaServer:Books Downloaders: MediaApp:Books</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>
   <TemplateURL/>
-  <Icon>https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/openbooks.png</Icon>
+  <Icon>https://raw.githubusercontent.com/Jonathon-Healy/librarian/main/public/icon.png</Icon>
   <ExtraParams/>
   <PostArgs/>
   <CPUset/>

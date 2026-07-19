@@ -15,6 +15,9 @@ ENV NODE_ENV=production \
     PGID=100
 
 VOLUME ["/config"]
+LABEL net.unraid.docker.icon="https://raw.githubusercontent.com/Jonathon-Healy/librarian/main/public/icon.png" \
+      net.unraid.docker.webui="http://[IP]:[PORT:8787]/"
+
 EXPOSE 8787
 
 HEALTHCHECK --interval=60s --timeout=5s --start-period=10s \
