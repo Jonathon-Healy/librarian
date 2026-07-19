@@ -1,0 +1,29 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>Librarian</Name>
+  <Repository>librarian:latest</Repository>
+  <Registry/>
+  <Network>bridge</Network>
+  <MyIP/>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support/>
+  <Project/>
+  <Overview>Librarian — audiobook automation. Search Audible's catalog, grab releases through Prowlarr, download with qBittorrent, and auto-import finished books into AudioBookShelf as Author/Title. Multi-user with TOTP two-factor auth, mobile-first web UI. Built as a locally-built image (librarian:latest) — rebuild with docker build after updating the source.</Overview>
+  <Category>MediaServer:Books Downloaders: MediaApp:Books</Category>
+  <WebUI>http://[IP]:[PORT:8787]/</WebUI>
+  <TemplateURL/>
+  <Icon>https://cdn.jsdelivr.net/gh/walkxcode/dashboard-icons/png/openbooks.png</Icon>
+  <ExtraParams/>
+  <PostArgs/>
+  <CPUset/>
+  <DonateText/>
+  <DonateLink/>
+  <Requires>Image must be built locally first: docker build -t librarian:latest /mnt/user/appdata/librarian-src</Requires>
+  <Config Name="WebUI Port" Target="8787" Default="8787" Mode="tcp" Description="Port for the Librarian web interface." Type="Port" Display="always" Required="true" Mask="false">8787</Config>
+  <Config Name="Config" Target="/config" Default="/mnt/user/appdata/librarian" Mode="rw" Description="Librarian settings, users, and download history." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/librarian</Config>
+  <Config Name="Downloads" Target="/downloads" Default="/mnt/user/data/torrents" Mode="rw" Description="MUST point at the same host folder qBittorrent downloads into (whatever share qBittorrent's downloads folder maps to). Librarian reads finished downloads from here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/torrents</Config>
+  <Config Name="Audiobook Library" Target="/audiobooks" Default="/mnt/user/media/audiobooks" Mode="rw" Description="MUST point at the same host folder your AudioBookShelf library uses. Imported books are placed here as Author/Title." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/media/audiobooks</Config>
+  <Config Name="PUID" Target="PUID" Default="99" Mode="" Description="File owner for imported books (99 = nobody, unraid default)." Type="Variable" Display="advanced" Required="false" Mask="false">99</Config>
+  <Config Name="PGID" Target="PGID" Default="100" Mode="" Description="File group for imported books (100 = users, unraid default)." Type="Variable" Display="advanced" Required="false" Mask="false">100</Config>
+</Container>
