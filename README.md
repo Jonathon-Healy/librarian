@@ -1,70 +1,67 @@
-# Librarian
+# Librarian — Install Guide (unraid)
 
-Audiobook automation for unraid. Search Audible's catalog, grab torrents through Prowlarr, download with qBittorrent, and auto-import finished books into AudioBookShelf as `Author/Title` — with a mobile-first UI, multiple accounts, and TOTP two-factor auth.
+Librarian is a self-hosted audiobook automation app with a clean, phone-first web UI. You search Audible's catalog; Librarian finds torrent releases through **Prowlarr**, downloads them with **qBittorrent**, and auto-imports finished books into **AudioBookShelf** as `Author/Title`, triggering a library scan. Multiple accounts, each with authenticator-app two-factor login.
 
-## Install on unraid
+## What you need
 
-**Step 1 — copy the source to the server.**
-Copy `Librarian.zip` to your appdata share, e.g. `\\YOUR-SERVER\appdata\Librarian.zip` from Windows.
+- unraid with Docker enabled
+- **qBittorrent** (any recent version, including 5.x and VPN-wrapped containers)
+- **Prowlarr** with at least one indexer that carries audiobooks
+- **AudioBookShelf** with an audiobook library created
 
-**Step 2 — build the image + install the template.** Open the unraid web terminal (>_ icon) and paste this whole block:
+## Install (5 minutes)
 
-```
-cd /mnt/user/appdata \
-&& rm -rf librarian-src \
-&& unzip -o Librarian.zip -d librarian-src \
-&& docker build -t librarian:latest librarian-src/librarian \
-&& mkdir -p /boot/config/plugins/dockerMan/templates-user \
-&& cp librarian-src/librarian/unraid/my-Librarian.xml /boot/config/plugins/dockerMan/templates-user/my-Librarian.xml \
-&& echo '=== Librarian image built and template installed ==='
-```
+Docker tab → **Add Container** → fill in:
 
-**Step 3 — add the container from the GUI.**
-Docker tab → **Add Container** → in the *Template* dropdown pick **Librarian** → check the three paths (Downloads must match qBittorrent's download folder, Audiobook Library must match AudioBookShelf's library folder) → **Apply**.
+| Field | Value |
+|---|---|
+| **Name** | `Librarian` |
+| **Repository** | `ghcr.io/jonathon-healy/librarian:latest` |
+| **Network Type** | Bridge |
 
-**Step 4 — first run.**
-Open `http://YOUR-SERVER-IP:8787`, create the admin account, scan the QR with your authenticator app. Then in Settings → Connections press **Scan for services**, fill in the credentials, and test each one.
+Then **Add another Path, Port, Variable** three times for paths and once for the port:
 
-## Alternative: run entirely from the CLI
+| Type | Container path | Host path |
+|---|---|---|
+| Port | `8787` | `8787` (or any free port) |
+| Path | `/config` | `/mnt/user/appdata/librarian` |
+| Path | `/downloads` | **The same host folder qBittorrent downloads into** |
+| Path | `/audiobooks` | **The same host folder your AudioBookShelf library reads** |
 
-If you'd rather skip the GUI form (the container still shows on the Docker tab):
-
-```
-docker rm -f Librarian 2>/dev/null ; docker run -d \
-  --name=Librarian \
-  --restart=unless-stopped \
-  -p 8787:8787 \
-  -e PUID=99 -e PGID=100 \
-  -v /mnt/user/appdata/librarian:/config \
-  -v /mnt/user/data/torrents:/downloads \
-  -v /mnt/user/media/audiobooks:/audiobooks \
-  librarian:latest
-```
-
-Adjust the two media paths to your shares.
-
-## Updating after a code change
-
-Re-copy the new `Librarian.zip`, then paste this block — note it does **not** copy the template again (unraid stores your customized paths in that template file; overwriting it would reset them to defaults):
+Getting those last two right is 90% of the setup. To see any container's real mounts, run this in the unraid terminal:
 
 ```
-cd /mnt/user/appdata \
-&& rm -rf librarian-src \
-&& unzip -o Librarian.zip -d librarian-src \
-&& docker build -t librarian:latest librarian-src/librarian \
-&& echo '=== rebuilt ==='
+docker inspect -f '{{range .Mounts}}{{.Source}} -> {{.Destination}}{{println}}{{end}}' CONTAINER-NAME
 ```
 
-Then recreate the container so it picks up the new image: Docker tab → **Librarian** → **Edit** → **Apply** (a plain restart reuses the old image and is not enough).
+Find qBittorrent's download mount and ABS's library mount, and copy their **host path** sides. Optionally add Variables `PUID`/`PGID` (defaults 99/100). Click **Apply** — unraid pulls the image and starts it.
 
-## Where credentials live in each app
+## First run
 
-- **qBittorrent** — the web UI username/password (Settings → Web UI in qBittorrent).
-- **Prowlarr API key** — Prowlarr → Settings → General → API Key.
-- **AudioBookShelf token** — ABS → Settings → Users → click your user → API Token.
+1. Open `http://YOUR-SERVER-IP:8787` (phone works great — use Chrome menu → *Add to Home screen* for an app icon).
+2. Create the admin account and scan the QR with any authenticator app (Google Authenticator, Authy, 1Password…).
+3. **Settings → Connections** → press **Scan for services** to auto-fill the URLs, then add:
+   - qBittorrent web UI username/password
+   - Prowlarr API key (Prowlarr → Settings → General)
+   - AudioBookShelf API token (ABS → Settings → Users → your user) — then **Load** and pick your library
+   - Optional: a notification URL (ntfy topic, Discord webhook, or Gotify) for "book ready" pushes
+4. Test each card (should go green), **Save connections**.
+5. **Settings → Paths → Remote path mapping**: if qBittorrent calls its download folder something different inside its container (commonly `/data`), enter that as "Path in qBittorrent" and `/downloads` as "Same folder in Librarian". Leave blank if both already use the same internal path.
+6. **Settings → Users**: add accounts for family. The **Auto-pick** option (on by default) makes Librarian download the best release automatically — ideal for non-technical users. New users scan their own MFA QR on first sign-in.
 
-## How importing works
+## Using it
 
-Librarian tags every torrent it adds (`librarian-<id>`, category `librarian`) and polls qBittorrent every 10 s. When a torrent finishes, the audio files are **copied** (so the torrent keeps seeding) into `LIBRARY/Author/Title/`, ownership is set to PUID:PGID, and an AudioBookShelf library scan is triggered.
+Search a title, author, "title by author", or ISBN → tap the book → **Find releases**. The indexer search runs in the background and shows in **Activity**: auto-pick users see it start downloading by itself; others tap **Choose release** when it's *Ready for selection*. If nothing is found, the book goes to **Wanted** and Librarian re-checks your indexers twice a day until a release appears. Finished books are copied into your library as `Author/Title` (the torrent keeps seeding) and AudioBookShelf rescans automatically. Search results with a green **✓ In library** badge are ones you already own.
 
-If qBittorrent reports paths Librarian can't see (different mount layout), set **Settings → Paths → Remote path mapping** in the web UI.
+Regular users can search and download; only admins can remove Activity items or change settings.
+
+## Updating
+
+Docker tab → **Check for Updates** → apply the update on Librarian. That's it.
+
+## Troubleshooting
+
+- **qBittorrent test fails** — the error names the cause: IP ban from failed logins (restart the qBittorrent container), "Enable Host header validation" in qBittorrent's WebUI security settings (untick it), or wrong credentials.
+- **Import fails, "Download not visible to Librarian"** — the `/downloads` host path doesn't match qBittorrent's, or the remote path mapping is wrong. The error shows the path qBittorrent reported; line the settings up and hit **Retry**.
+- **Import succeeds but no book in ABS** — the `/audiobooks` host path doesn't match the folder your ABS library actually reads, or no library is selected in Settings → Connections.
+- **Yellow "can't reach qBittorrent" banner in Activity** — qBittorrent is down/unreachable; clears itself when it's back.

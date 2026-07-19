@@ -1,0 +1,7 @@
+node_modules
+*.log
+.git
+.github
+unraid
+README.md
+GITHUB.md

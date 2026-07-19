@@ -1,15 +1,15 @@
 <?xml version="1.0"?>
 <Container version="2">
   <Name>Librarian</Name>
-  <Repository>librarian:latest</Repository>
-  <Registry/>
+  <Repository>ghcr.io/jonathon-healy/librarian:latest</Repository>
+  <Registry>https://github.com/Jonathon-Healy/librarian</Registry>
   <Network>bridge</Network>
   <MyIP/>
   <Shell>sh</Shell>
   <Privileged>false</Privileged>
   <Support/>
   <Project/>
-  <Overview>Librarian — audiobook automation. Search Audible's catalog, grab releases through Prowlarr, download with qBittorrent, and auto-import finished books into AudioBookShelf as Author/Title. Multi-user with TOTP two-factor auth, mobile-first web UI. Built as a locally-built image (librarian:latest) — rebuild with docker build after updating the source.</Overview>
+  <Overview>Librarian — audiobook automation. Search Audible's catalog, grab releases through Prowlarr, download with qBittorrent, and auto-import finished books into AudioBookShelf as Author/Title. Multi-user with TOTP two-factor auth, mobile-first web UI. Pulled from ghcr.io — update via unraid's normal Check for Updates.</Overview>
   <Category>MediaServer:Books Downloaders: MediaApp:Books</Category>
   <WebUI>http://[IP]:[PORT:8787]/</WebUI>
   <TemplateURL/>
@@ -19,7 +19,6 @@
   <CPUset/>
   <DonateText/>
   <DonateLink/>
-  <Requires>Image must be built locally first: docker build -t librarian:latest /mnt/user/appdata/librarian-src</Requires>
   <Config Name="WebUI Port" Target="8787" Default="8787" Mode="tcp" Description="Port for the Librarian web interface." Type="Port" Display="always" Required="true" Mask="false">8787</Config>
   <Config Name="Config" Target="/config" Default="/mnt/user/appdata/librarian" Mode="rw" Description="Librarian settings, users, and download history." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/librarian</Config>
   <Config Name="Downloads" Target="/downloads" Default="/mnt/user/data/torrents" Mode="rw" Description="MUST point at the same host folder qBittorrent downloads into (whatever share qBittorrent's downloads folder maps to). Librarian reads finished downloads from here." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/data/torrents</Config>
