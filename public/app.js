@@ -6,6 +6,7 @@ const state = {
   user: null,
   view: 'search',
   searchMode: 'audio', // 'audio' | 'ebook' — fully separate catalogs and indexer categories
+  activityMode: 'audio',
   searchQuery: '',
   searchResults: null, // null = untouched, [] = no results
   searching: false,
@@ -426,14 +427,14 @@ function openBookSheet(book) {
 /* ---------------- release picker (from Activity) ---------------- */
 
 function relRow(rel, i) {
-  const cls = rel.seeders >= 5 ? 'good' : rel.seeders >= 1 ? 'mid' : 'low';
+  const cls = rel.abb ? 'mid' : rel.seeders >= 5 ? 'good' : rel.seeders >= 1 ? 'mid' : 'low';
   return `
   <div class="rel" style="animation-delay:${Math.min(i * 30, 250)}ms">
     <div style="flex:1;min-width:0">
       <div class="rt">${esc(rel.title)}</div>
       <div class="rm">
         ${rel.preferred ? '<span class="pill" style="color:var(--accent)">★</span>' : ''}
-        <span class="pill"><span class="seeds ${cls}">${rel.seeders}</span>&nbsp;seeders</span>
+        <span class="pill"><span class="seeds ${cls}">${rel.abb ? '?' : rel.seeders}</span>&nbsp;seeders</span>
         <span class="pill">${fmtSize(rel.size)}</span>
         <span class="pill">${esc(rel.indexer)}</span>
         ${rel.publishDate ? `<span class="pill">${fmtAge(rel.publishDate)}</span>` : ''}
@@ -494,7 +495,22 @@ const STATUS_LABEL = { searching: 'Searching indexers…', ready: 'Ready for sel
 let queueSig = '';
 
 function renderActivity(c) {
-  c.innerHTML = '<div class="view"><div class="h1">Activity</div><div id="qbanner"></div><div id="qlist"></div></div>';
+  c.innerHTML = `
+    <div class="view">
+      <div class="h1">Activity</div>
+      <div class="seg" style="margin-bottom:12px">
+        <button data-am="audio" class="${state.activityMode === 'audio' ? 'active' : ''}">🎧 Audiobooks</button>
+        <button data-am="ebook" class="${state.activityMode === 'ebook' ? 'active' : ''}">📖 eBooks</button>
+      </div>
+      <div id="qbanner"></div><div id="qlist"></div>
+    </div>`;
+  c.querySelectorAll('.seg button[data-am]').forEach(b => b.onclick = () => {
+    if (state.activityMode === b.dataset.am) return;
+    state.activityMode = b.dataset.am;
+    c.querySelectorAll('.seg button[data-am]').forEach(x => x.classList.toggle('active', x.dataset.am === state.activityMode));
+    queueSig = '';
+    paintQueue(true);
+  });
   queueSig = ''; // force a fresh (animated) first paint
   paintQueue(true);
   const tick = async () => { await refreshQueueBadge(); paintQueue(); };
@@ -510,7 +526,7 @@ function paintQueue(firstPaint = false) {
   if (banner) banner.innerHTML = state.queueWarning ? `<div class="banner">⚠ ${esc(state.queueWarning)}</div>` : '';
 
   // Structural signature — only rebuild the DOM when items appear/disappear or change status.
-  const sig = state.queue.map(q => q.id + ':' + q.status + ':' + (q.error || '') + ':' + (q.note || '')).join('|');
+  const sig = state.activityMode + '||' + state.queue.map(q => q.id + ':' + q.status + ':' + (q.error || '') + ':' + (q.note || '')).join('|');
   if (sig === queueSig && !firstPaint) {
     // Same structure: update the moving parts in place. No flicker, no jumping.
     for (const q of state.queue) {
@@ -525,8 +541,9 @@ function paintQueue(firstPaint = false) {
   }
   queueSig = sig;
 
-  if (!state.queue.length) {
-    el.innerHTML = `<div class="empty">${IC.activity}<div class="big">Nothing here yet</div>Grab a book from Search and it'll show up here.</div>`;
+  const shown = state.queue.filter(q => (q.mediaType || 'audio') === state.activityMode);
+  if (!shown.length) {
+    el.innerHTML = `<div class="empty">${IC.activity}<div class="big">Nothing here yet</div>${state.activityMode === 'ebook' ? 'Grab an eBook from Search and it\'ll show up here.' : 'Grab an audiobook from Search and it\'ll show up here.'}</div>`;
     return;
   }
   const anim = firstPaint ? '' : ' noanim';
@@ -554,11 +571,7 @@ function paintQueue(firstPaint = false) {
         </div>
       </div>
     </div>`;
-  el.innerHTML = [['audio', '🎧 Audiobooks'], ['ebook', '📖 eBooks']].map(([mt, label]) => {
-    const items = state.queue.filter(q => (q.mediaType || 'audio') === mt);
-    if (!items.length) return '';
-    return `<div class="qsection">${label}</div>` + items.map(tile).join('');
-  }).join('');
+  el.innerHTML = shown.map(tile).join('');
   el.querySelectorAll('[data-act]').forEach(btn => {
     const id = btn.closest('.qitem').dataset.id;
     const item = state.queue.find(q => q.id === id);
@@ -672,6 +685,11 @@ function renderConnections(body) {
       <div class="field"><label>Category</label><input class="input" id="qb-cat" value="${esc(s.qbit.category || 'librarian')}"></div>
     `, 'qbit')}
 
+    ${connCard('abb', 'AudioBookBay (built-in)', 'Librarian searches AudioBookBay directly — no Prowlarr indexer needed. It\'s tried FIRST for every audiobook; Prowlarr is the fallback when it finds nothing. If the site stops responding, swap in a mirror URL (audiobookbay.lu / audiobookbay.is).', `
+      <label class="checkrow" style="margin:0 0 12px"><input type="checkbox" id="bb-en" ${s.abb?.enabled !== false ? 'checked' : ''}> Search AudioBookBay first for audiobooks</label>
+      <div class="field"><label>Site URL</label><input class="input" id="bb-url" placeholder="https://audiobookbay.lu" value="${esc(s.abb?.url || 'https://audiobookbay.lu')}"></div>
+    `, 'abb')}
+
     ${connCard('prowlarr', 'Prowlarr', 'Your indexer hub. Find the API key in Prowlarr under Settings → General → API Key.', `
       <div class="field"><label>URL</label><input class="input" id="pr-url" placeholder="http://192.168.1.10:9696" value="${esc(s.prowlarr.url)}"></div>
       <div class="field"><label>API key</label><input class="input" id="pr-key" type="password" placeholder="${secretPh(s.prowlarr.apiKey)}"></div>
@@ -706,6 +724,10 @@ function renderConnections(body) {
 
   const grabCfg = svc => {
     if (svc === 'notify') return { url: body.querySelector('#nt-url').value.trim() };
+    if (svc === 'abb') return {
+      enabled: body.querySelector('#bb-en').checked,
+      url: body.querySelector('#bb-url').value.trim() || 'https://audiobookbay.lu'
+    };
     if (svc === 'smtp') return {
       host: body.querySelector('#sm-host').value.trim(),
       port: body.querySelector('#sm-port').value.trim() || '587',
@@ -783,7 +805,7 @@ function renderConnections(body) {
     try {
       state.settings = await api('/settings', {
         method: 'PUT',
-        body: { qbit: grabCfg('qbit'), prowlarr: grabCfg('prowlarr'), abs: grabCfg('abs'), notify: grabCfg('notify'), smtp: grabCfg('smtp') }
+        body: { qbit: grabCfg('qbit'), prowlarr: grabCfg('prowlarr'), abb: grabCfg('abb'), abs: grabCfg('abs'), notify: grabCfg('notify'), smtp: grabCfg('smtp') }
       });
       toast('Connections saved');
     } catch (err) { toast(err.message, false); }

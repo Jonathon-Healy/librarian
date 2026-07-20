@@ -15,6 +15,7 @@ const defaults = () => ({
   settings: {
     qbit: { url: '', username: '', password: '', category: 'librarian' },
     prowlarr: { url: '', apiKey: '', preferred: '' }, // preferred: comma-separated indexer names listed/picked first
+    abb: { enabled: true, url: 'https://audiobookbay.lu' }, // built-in AudioBookBay indexer (audio only, tried before Prowlarr)
     abs: { url: '', apiKey: '', libraryId: '', libraryName: '' },
     paths: { library: '/audiobooks', ebooks: '/ebooks' },
     pathMap: { remote: '', local: '' }, // qBittorrent path prefix -> Librarian path prefix

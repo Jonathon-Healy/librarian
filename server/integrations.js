@@ -193,6 +193,90 @@ async function prowlarrSearch(cfg, query, mediaType = 'audio') {
     .sort((a, b) => (b.preferred - a.preferred) || (b.seeders - a.seeders));
 }
 
+/* ---------------- AudioBookBay (built-in scraper, audiobooks only) ---------------- */
+
+const BROWSER_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0 Safari/537.36',
+  'Accept': 'text/html,application/xhtml+xml'
+};
+
+function parseHumanSize(str) {
+  const m = String(str || '').match(/([\d.,]+)\s*(GB|MB|KB)/i);
+  if (!m) return 0;
+  const mult = { kb: 1e3, mb: 1e6, gb: 1e9 }[m[2].toLowerCase()];
+  return Math.round(parseFloat(m[1].replace(/,/g, '')) * mult);
+}
+
+async function abbSearch(cfg, query) {
+  const base = clean(cfg.url || 'https://audiobookbay.lu');
+  const url = base + '/?s=' + encodeURIComponent(query.toLowerCase());
+  const res = await jfetch(url, { headers: BROWSER_HEADERS }, 20000);
+  if (!res.ok) throw new Error('AudioBookBay answered HTTP ' + res.status);
+  const html = await res.text();
+  const releases = [];
+  const seen = new Set();
+  // WordPress result blocks: split on the outer post containers only (class="post" or
+  // "post something") — NOT inner divs like postTitle/postContent
+  for (const chunk of html.split(/<div[^>]+class="post(?:\s[^"]*)?"/i).slice(1)) {
+    const t = chunk.match(/<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/i);
+    if (!t) continue;
+    const title = t[2].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+    if (!title) continue;
+    let href;
+    try { href = new URL(t[1], base).href; } catch { continue; }
+    if (seen.has(href)) continue;
+    seen.add(href);
+    const fmt = (chunk.match(/Format:\s*(?:<[^>]*>\s*)?([A-Za-z0-9]{2,6})/i) || [])[1] || '';
+    const size = parseHumanSize((chunk.match(/File Size:\s*(?:<[^>]*>\s*)?([\d.,]+\s*[KMG]Bs?)/i) || [])[1]);
+    releases.push({
+      guid: href,
+      title: title + (fmt ? ' [' + fmt.toUpperCase() + ']' : ''),
+      size,
+      seeders: 1, // ABB doesn't expose seed counts on search results — shown as "?" in the UI
+      leechers: 0,
+      indexer: 'AudioBookBay',
+      preferred: true,
+      abb: true, // link is a details page; resolved to a magnet at grab time
+      publishDate: null,
+      link: href
+    });
+    if (releases.length >= 15) break;
+  }
+  return releases;
+}
+
+const DEFAULT_TRACKERS = [
+  'udp://tracker.opentrackr.org:1337/announce',
+  'udp://open.stealth.si:80/announce',
+  'udp://exodus.desync.com:6969/announce',
+  'udp://tracker.torrent.eu.org:451/announce'
+];
+
+// ABB detail pages list the torrent's info hash (and usually trackers) — build a magnet.
+async function abbResolveMagnet(pageUrl, title) {
+  const res = await jfetch(pageUrl, { headers: BROWSER_HEADERS }, 20000);
+  if (!res.ok) throw new Error('AudioBookBay page fetch failed (HTTP ' + res.status + ')');
+  const html = await res.text();
+  const direct = html.match(/magnet:\?xt=urn:btih:[^"'\s<]+/i);
+  if (direct) return direct[0].replace(/&amp;/g, '&');
+  const hash = (html.match(/Info\s*Hash[\s\S]{0,300}?\b([a-fA-F0-9]{40})\b/i) || [])[1];
+  if (!hash) throw new Error('Couldn\'t find the torrent hash on the AudioBookBay page — the site layout may have changed, or this mirror is serving a challenge page. Try a different release or another ABB mirror URL in Settings.');
+  const pageTrackers = [...html.matchAll(/(?:udp|https?):\/\/[^<\s"'&]+/gi)]
+    .map(m => m[0])
+    .filter(u => u.startsWith('udp://') || /announce/i.test(u))
+    .slice(0, 10);
+  const trackers = [...new Set([...pageTrackers, ...DEFAULT_TRACKERS])];
+  return 'magnet:?xt=urn:btih:' + hash.toLowerCase()
+    + '&dn=' + encodeURIComponent(title || 'audiobook')
+    + trackers.map(t => '&tr=' + encodeURIComponent(t)).join('');
+}
+
+async function abbTest(cfg) {
+  const r = await abbSearch(cfg, 'the martian');
+  if (!r.length) return { ok: true, detail: 'Site reachable, but a test search returned nothing — the mirror may be geo-blocked or its layout changed. Try another mirror URL (e.g. audiobookbay.is).' };
+  return { ok: true, detail: 'Connected — test search returned ' + r.length + ' results' };
+}
+
 /* ---------------- AudioBookShelf ---------------- */
 
 async function absReq(cfg, apiPath, opts = {}) {
@@ -566,5 +650,6 @@ module.exports = {
   absTest, absLibraries, absScan, absLibraryItems,
   notify, notifySend, scoreRelease, pickBestRelease,
   audibleSearch, searchBooks, ebookSearch,
+  abbSearch, abbResolveMagnet, abbTest,
   smtpTest, sendToKindle, discover
 };

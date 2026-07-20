@@ -326,7 +326,7 @@ app.get('/api/settings', adminOnly, (req, res) => res.json(maskedSettings()));
 
 app.put('/api/settings', adminOnly, wrap(async (req, res) => {
   const body = req.body || {};
-  for (const section of ['qbit', 'prowlarr', 'abs', 'paths', 'pathMap', 'notify', 'smtp']) {
+  for (const section of ['qbit', 'prowlarr', 'abb', 'abs', 'paths', 'pathMap', 'notify', 'smtp']) {
     if (!body[section]) continue;
     const merged = resolveSecrets(section, body[section]);
     if (merged.url) merged.url = String(merged.url).trim().replace(/\/+$/, '');
@@ -349,6 +349,7 @@ app.post('/api/settings/test/:service', adminOnly, wrap(async (req, res) => {
     out = { ok: true, detail: 'Notification sent — check your phone/channel' };
   }
   else if (svc === 'smtp') out = await I.smtpTest(cfg);
+  else if (svc === 'abb') out = await I.abbTest(cfg);
   else throw httpErr(400, 'Unknown service');
   res.json(out);
 }));
@@ -444,6 +445,10 @@ async function performGrab(item, release) {
   const s = data.settings;
   if (!s.qbit.url) throw new Error('qBittorrent isn\'t configured yet — an admin can set it up in Settings');
   if (!release?.link) throw new Error('That release has no usable download link');
+  // AudioBookBay releases carry a details-page link — resolve it to a magnet now
+  if (release.abb && !String(release.link).startsWith('magnet:')) {
+    release = { ...release, link: await I.abbResolveMagnet(release.link, item.title) };
+  }
   const tag = 'librarian-' + item.id;
   await I.qbitEnsureCategory(s.qbit);
   await I.qbitAdd(s.qbit, { url: release.link, tag });
@@ -465,10 +470,21 @@ async function runReleaseSearch(id) {
   const item = data.queue.find(q => q.id === id);
   if (!item) return;
   try {
-    const p = data.settings.prowlarr;
+    const s = data.settings;
+    const p = s.prowlarr;
     const mt = item.mediaType || 'audio';
-    let results = await I.prowlarrSearch(p, [item.title, item.author].filter(Boolean).join(' '), mt);
-    if (!results.length && item.author) results = await I.prowlarrSearch(p, item.title, mt);
+    let results = [];
+    // Audiobooks: built-in AudioBookBay first; Prowlarr only if ABB finds nothing (or is down)
+    if (mt === 'audio' && s.abb && s.abb.enabled !== false) {
+      try {
+        results = await I.abbSearch(s.abb, [item.title, item.author].filter(Boolean).join(' '));
+        if (!results.length && item.author) results = await I.abbSearch(s.abb, item.title);
+      } catch { results = []; /* ABB unreachable — fall through to Prowlarr */ }
+    }
+    if (!results.length && p.url) {
+      results = await I.prowlarrSearch(p, [item.title, item.author].filter(Boolean).join(' '), mt);
+      if (!results.length && item.author) results = await I.prowlarrSearch(p, item.title, mt);
+    }
     item.lastChecked = Date.now();
     if (results.length) {
       item.releases = results.slice(0, 50);
@@ -515,10 +531,11 @@ async function recheckWanted() {
 
 app.post('/api/search-releases', wrap(async (req, res) => {
   const s = data.settings;
-  if (!s.prowlarr.url) throw httpErr(400, 'Prowlarr isn\'t configured yet — an admin can set it up in Settings');
   const { book, force } = req.body || {};
   if (!book?.title) throw httpErr(400, 'Missing book details');
   const mediaType = book.mediaType === 'ebook' ? 'ebook' : 'audio';
+  const abbUsable = mediaType === 'audio' && s.abb && s.abb.enabled !== false;
+  if (!s.prowlarr.url && !abbUsable) throw httpErr(400, 'No release source configured — an admin can set up Prowlarr (or enable AudioBookBay) in Settings');
   const dupe = book.asin && data.queue.find(q =>
     q.asin === book.asin && (q.mediaType || 'audio') === mediaType && ['searching', 'ready', 'wanted'].includes(q.status));
   if (dupe) return res.json({ ok: true, id: dupe.id, existing: true });
