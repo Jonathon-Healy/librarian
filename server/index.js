@@ -40,7 +40,10 @@ function cookies(req) {
 }
 
 function publicUser(u) {
-  return { id: u.id, username: u.username, role: u.role, autoPick: !!u.autoPick };
+  return {
+    id: u.id, username: u.username, role: u.role, autoPick: !!u.autoPick,
+    kindleEmail: u.kindleEmail || '', autoSendKindle: !!u.autoSendKindle
+  };
 }
 
 function startSession(res, user) {
@@ -247,6 +250,16 @@ app.post('/api/me/autopick', wrap(async (req, res) => {
   res.json({ ok: true, autoPick: req.user.autoPick });
 }));
 
+app.post('/api/me/kindle', wrap(async (req, res) => {
+  const { kindleEmail, autoSendKindle } = req.body || {};
+  const email = String(kindleEmail || '').trim();
+  if (email && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw httpErr(400, 'That doesn\'t look like an email address');
+  req.user.kindleEmail = email;
+  req.user.autoSendKindle = !!autoSendKindle && !!email;
+  store.save();
+  res.json({ ok: true, kindleEmail: req.user.kindleEmail, autoSendKindle: req.user.autoSendKindle });
+}));
+
 app.delete('/api/users/:id', adminOnly, wrap(async (req, res) => {
   const user = data.users.find(u => u.id === req.params.id);
   if (!user) throw httpErr(404, 'User not found');
@@ -295,6 +308,7 @@ function maskedSettings() {
   if (s.qbit.password) s.qbit.password = MASK;
   if (s.prowlarr.apiKey) s.prowlarr.apiKey = MASK;
   if (s.abs.apiKey) s.abs.apiKey = MASK;
+  if (s.smtp.pass) s.smtp.pass = MASK;
   return s;
 }
 
@@ -302,7 +316,7 @@ function maskedSettings() {
 function resolveSecrets(section, cfg) {
   const merged = Object.assign({}, data.settings[section], cfg || {});
   const stored = data.settings[section];
-  for (const field of ['password', 'apiKey']) {
+  for (const field of ['password', 'apiKey', 'pass']) {
     if (merged[field] === MASK) merged[field] = stored[field];
   }
   return merged;
@@ -312,7 +326,7 @@ app.get('/api/settings', adminOnly, (req, res) => res.json(maskedSettings()));
 
 app.put('/api/settings', adminOnly, wrap(async (req, res) => {
   const body = req.body || {};
-  for (const section of ['qbit', 'prowlarr', 'abs', 'paths', 'pathMap', 'notify']) {
+  for (const section of ['qbit', 'prowlarr', 'abs', 'paths', 'pathMap', 'notify', 'smtp']) {
     if (!body[section]) continue;
     const merged = resolveSecrets(section, body[section]);
     if (merged.url) merged.url = String(merged.url).trim().replace(/\/+$/, '');
@@ -325,7 +339,7 @@ app.put('/api/settings', adminOnly, wrap(async (req, res) => {
 app.post('/api/settings/test/:service', adminOnly, wrap(async (req, res) => {
   const svc = req.params.service;
   const cfg = resolveSecrets(svc, req.body);
-  if (!cfg.url) throw httpErr(400, 'Enter a URL first');
+  if (svc !== 'smtp' && !cfg.url) throw httpErr(400, 'Enter a URL first');
   let out;
   if (svc === 'qbit') out = await I.qbitTest(cfg);
   else if (svc === 'prowlarr') out = await I.prowlarrTest(cfg);
@@ -334,6 +348,7 @@ app.post('/api/settings/test/:service', adminOnly, wrap(async (req, res) => {
     await I.notifySend(cfg, 'Librarian', 'Test notification — your setup works!');
     out = { ok: true, detail: 'Notification sent — check your phone/channel' };
   }
+  else if (svc === 'smtp') out = await I.smtpTest(cfg);
   else throw httpErr(400, 'Unknown service');
   res.json(out);
 }));
@@ -401,7 +416,12 @@ function isInLibrary(idx, title, authors) {
 app.get('/api/search', wrap(async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json([]);
+  if (req.query.type === 'ebook') {
+    // ebooks: Google Books metadata — completely separate source from audiobooks
+    return res.json(await I.googleBooksSearch(q));
+  }
   const results = await I.searchBooks(q);
+  for (const b of results) b.mediaType = 'audio';
   const idx = await libraryIndex();
   if (idx.length) for (const b of results) b.inLibrary = isInLibrary(idx, b.title, b.authors);
   res.json(results);
@@ -446,15 +466,16 @@ async function runReleaseSearch(id) {
   if (!item) return;
   try {
     const p = data.settings.prowlarr;
-    let results = await I.prowlarrSearch(p, [item.title, item.author].filter(Boolean).join(' '));
-    if (!results.length && item.author) results = await I.prowlarrSearch(p, item.title);
+    const mt = item.mediaType || 'audio';
+    let results = await I.prowlarrSearch(p, [item.title, item.author].filter(Boolean).join(' '), mt);
+    if (!results.length && item.author) results = await I.prowlarrSearch(p, item.title, mt);
     item.lastChecked = Date.now();
     if (results.length) {
       item.releases = results.slice(0, 50);
       item.error = null;
       const requester = data.users.find(u => u.username === item.requestedBy);
       if (requester?.autoPick) {
-        const best = I.pickBestRelease(item.releases);
+        const best = I.pickBestRelease(item.releases, mt);
         if (best) {
           try {
             await performGrab(item, best);
@@ -497,9 +518,11 @@ app.post('/api/search-releases', wrap(async (req, res) => {
   if (!s.prowlarr.url) throw httpErr(400, 'Prowlarr isn\'t configured yet — an admin can set it up in Settings');
   const { book, force } = req.body || {};
   if (!book?.title) throw httpErr(400, 'Missing book details');
-  const dupe = book.asin && data.queue.find(q => q.asin === book.asin && ['searching', 'ready', 'wanted'].includes(q.status));
+  const mediaType = book.mediaType === 'ebook' ? 'ebook' : 'audio';
+  const dupe = book.asin && data.queue.find(q =>
+    q.asin === book.asin && (q.mediaType || 'audio') === mediaType && ['searching', 'ready', 'wanted'].includes(q.status));
   if (dupe) return res.json({ ok: true, id: dupe.id, existing: true });
-  if (!force) {
+  if (!force && mediaType === 'audio') {
     const idx = await libraryIndex();
     if (idx.length && isInLibrary(idx, book.title, book.authors)) {
       return res.status(409).json({ duplicate: true, error: `"${book.title}" looks like it's already in your AudioBookShelf library.` });
@@ -507,7 +530,7 @@ app.post('/api/search-releases', wrap(async (req, res) => {
   }
   const id = rid();
   data.queue.unshift({
-    id, type: 'search', status: 'searching', addedAt: Date.now(),
+    id, type: 'search', mediaType, status: 'searching', addedAt: Date.now(),
     asin: book.asin || null, title: book.title,
     author: (book.authors || [])[0] || '', authors: book.authors || [],
     cover: book.cover || null, requestedBy: req.user.username
@@ -524,6 +547,7 @@ app.post('/api/grab', wrap(async (req, res) => {
   const existing = itemId ? data.queue.find(q => q.id === itemId) : null;
   const item = existing || {
     id: rid(), asin: book.asin || null, title: book.title,
+    mediaType: book.mediaType === 'ebook' ? 'ebook' : 'audio',
     author: (book.authors || [])[0] || '', cover: book.cover || null,
     requestedBy: req.user.username
   };
@@ -558,6 +582,20 @@ app.delete('/api/queue/:id', wrap(async (req, res) => {
     try { await I.qbitDelete(data.settings.qbit, item.hash, deleteFiles); } catch { }
   }
   data.queue = data.queue.filter(q => q.id !== item.id);
+  store.save();
+  res.json({ ok: true });
+}));
+
+app.post('/api/queue/:id/send-kindle', wrap(async (req, res) => {
+  const item = data.queue.find(q => q.id === req.params.id);
+  if (!item) throw httpErr(404, 'Item not found');
+  if (!item.ebookFile) throw httpErr(400, 'No ebook file recorded for this item');
+  const fsx = require('fs');
+  if (!fsx.existsSync(item.ebookFile)) throw httpErr(400, 'The ebook file is no longer at ' + item.ebookFile);
+  if (!data.settings.smtp.host) throw httpErr(400, 'Email isn\'t set up yet — an admin can add SMTP details in Settings → Connections');
+  if (!req.user.kindleEmail) throw httpErr(400, 'Add your Kindle email in Settings → Profile first');
+  await I.sendToKindle(data.settings.smtp, req.user.kindleEmail, item.ebookFile, item.title);
+  item.note = 'Sent to ' + req.user.kindleEmail;
   store.save();
   res.json({ ok: true });
 }));

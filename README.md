@@ -1,6 +1,6 @@
 # Librarian — Install Guide (unraid)
 
-Librarian is a self-hosted audiobook automation app with a clean, phone-first web UI. You search Audible's catalog; Librarian finds torrent releases through **Prowlarr**, downloads them with **qBittorrent**, and auto-imports finished books into **AudioBookShelf** as `Author/Title`, triggering a library scan. Multiple accounts, each with authenticator-app two-factor login.
+Librarian is a self-hosted audiobook **and eBook** automation app with a clean, phone-first web UI. Audiobooks: search Audible's catalog, grab releases through **Prowlarr**, download with **qBittorrent**, auto-import into **AudioBookShelf** as `Author/Title`. eBooks: search Google Books, download the same way, store on the server, and optionally **auto-send to a Kindle** by email. Multiple accounts, each with authenticator-app two-factor login.
 
 ## What you need
 
@@ -27,6 +27,7 @@ Then **Add another Path, Port, Variable** three times for paths and once for the
 | Path | `/config` | `/mnt/user/appdata/librarian` |
 | Path | `/downloads` | **The same host folder qBittorrent downloads into** |
 | Path | `/audiobooks` | **The same host folder your AudioBookShelf library reads** |
+| Path | `/ebooks` | Any share for eBooks (e.g. `/mnt/user/media/ebooks`) |
 
 Getting those last two right is 90% of the setup. To see any container's real mounts, run this in the unraid terminal:
 
@@ -45,13 +46,16 @@ Find qBittorrent's download mount and ABS's library mount, and copy their **host
    - Prowlarr API key (Prowlarr → Settings → General)
    - AudioBookShelf API token (ABS → Settings → Users → your user) — then **Load** and pick your library
    - Optional: a notification URL (ntfy topic, Discord webhook, or Gotify) for "book ready" pushes
+   - Optional, for Send-to-Kindle: SMTP details (a Gmail app-password works). Each Kindle owner then adds their `@kindle.com` address in their own **Profile**, and must add Librarian's "From" address to their Amazon **Approved Personal Document E-mail List** (amazon.com → Content Library → Preferences)
 4. Test each card (should go green), **Save connections**.
 5. **Settings → Paths → Remote path mapping**: if qBittorrent calls its download folder something different inside its container (commonly `/data`), enter that as "Path in qBittorrent" and `/downloads` as "Same folder in Librarian". Leave blank if both already use the same internal path.
 6. **Settings → Users**: add accounts for family. The **Auto-pick** option (on by default) makes Librarian download the best release automatically — ideal for non-technical users. New users scan their own MFA QR on first sign-in.
 
 ## Using it
 
-Search a title, author, "title by author", or ISBN → tap the book → **Find releases**. The indexer search runs in the background and shows in **Activity**: auto-pick users see it start downloading by itself; others tap **Choose release** when it's *Ready for selection*. If nothing is found, the book goes to **Wanted** and Librarian re-checks your indexers twice a day until a release appears. Finished books are copied into your library as `Author/Title` (the torrent keeps seeding) and AudioBookShelf rescans automatically. Search results with a green **✓ In library** badge are ones you already own.
+Pick **🎧 Audiobooks** or **📖 eBooks** at the top of Search — they use completely separate catalogs and indexer categories, so results never mix. Then: search a title, author, "title by author", or ISBN → tap the book → **Find releases**. The indexer search runs in the background and shows in **Activity**: auto-pick users see it start downloading by itself; others tap **Choose release** when it's *Ready for selection*. If nothing is found, the book goes to **Wanted** and Librarian re-checks your indexers twice a day until a release appears. Finished books are copied into your library as `Author/Title` (the torrent keeps seeding) and AudioBookShelf rescans automatically. Search results with a green **✓ In library** badge are ones you already own.
+
+eBooks import to the `/ebooks` share as `Author/Title`. If a user has a Kindle email saved with auto-send on (Profile), each finished eBook is emailed straight to their Kindle (EPUB/PDF, Amazon's 50 MB limit applies); there's also a manual **Send to Kindle** button on imported eBooks in Activity.
 
 Regular users can search and download; only admins can remove Activity items or change settings.
 

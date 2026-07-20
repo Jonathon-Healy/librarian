@@ -164,9 +164,12 @@ async function prowlarrTest(cfg) {
   return { ok: true, detail: `Connected — ${enabled} enabled indexer${enabled === 1 ? '' : 's'}` };
 }
 
-async function prowlarrSearch(cfg, query) {
+// mediaType 'audio' → audiobook categories (3030/3000); 'ebook' → book categories (7020/7000).
+// Distinct categories mean an audiobook search never returns ebook releases and vice versa.
+async function prowlarrSearch(cfg, query, mediaType = 'audio') {
+  const cats = mediaType === 'ebook' ? '&categories=7020&categories=7000' : '&categories=3030&categories=3000';
   const url = clean(cfg.url) + '/api/v1/search?query=' + encodeURIComponent(query)
-    + '&categories=3030&categories=3000&type=search&limit=100';
+    + cats + '&type=search&limit=100';
   const res = await jfetch(url, { headers: { 'X-Api-Key': cfg.apiKey || '' } }, 60000);
   if (res.status === 401) throw new Error('Prowlarr rejected the API key');
   if (!res.ok) throw new Error('Prowlarr search failed (HTTP ' + res.status + ')');
@@ -251,22 +254,31 @@ const notify = (cfg, title, message) => notifySend(cfg, title, message).catch(()
 
 /* ---------------- release auto-pick scoring ---------------- */
 
-function scoreRelease(r) {
+function scoreRelease(r, mediaType = 'audio') {
   let s = 0;
   const t = r.title || '';
-  if (/\bm4b\b/i.test(t)) s += 3;       // chapterized single-file — ideal
-  else if (/\bm4a\b/i.test(t)) s += 2;
-  else if (/\bmp3\b/i.test(t)) s += 1;
+  if (mediaType === 'ebook') {
+    if (/\bepub\b/i.test(t)) s += 3;      // Kindle-compatible and universal
+    else if (/\bazw3?\b/i.test(t)) s += 1.5;
+    else if (/\bmobi\b/i.test(t)) s += 1;
+    else if (/\bpdf\b/i.test(t)) s += 0.5;
+    const mb = (r.size || 0) / 1e6;
+    if (mb >= 0.1 && mb <= 200) s += 1;   // sane ebook size
+  } else {
+    if (/\bm4b\b/i.test(t)) s += 3;       // chapterized single-file — ideal
+    else if (/\bm4a\b/i.test(t)) s += 2;
+    else if (/\bmp3\b/i.test(t)) s += 1;
+    const gb = (r.size || 0) / 1e9;
+    if (gb >= 0.05 && gb <= 4) s += 1;    // sane audiobook size
+  }
   s += Math.min(r.seeders || 0, 20) / 10; // up to +2 for healthy swarms
-  const gb = (r.size || 0) / 1e9;
-  if (gb >= 0.05 && gb <= 4) s += 1;      // sane audiobook size
   return s;
 }
 
-function pickBestRelease(list) {
+function pickBestRelease(list, mediaType = 'audio') {
   const seeded = (list || []).filter(r => (r.seeders || 0) > 0);
   if (!seeded.length) return null;
-  return seeded.reduce((a, b) => (scoreRelease(b) > scoreRelease(a) ? b : a));
+  return seeded.reduce((a, b) => (scoreRelease(b, mediaType) > scoreRelease(a, mediaType) ? b : a));
 }
 
 /* ---------------- Audible metadata ---------------- */
@@ -335,6 +347,84 @@ async function isbnLookup(isbn) {
   const v = j.items?.[0]?.volumeInfo;
   if (!v || !v.title) return null;
   return [v.title, (v.authors || [])[0]].filter(Boolean).join(' ');
+}
+
+/* ---------------- Google Books (ebook metadata) ---------------- */
+
+async function googleBooksSearch(q) {
+  let query = q;
+  const digits = q.replace(/[-\s]/g, '');
+  const byAuthor = q.match(/^(.{2,}?)\s+by\s+(.{2,})$/i);
+  if (/^(97[89])?\d{9}[\dXx]$/.test(digits)) query = 'isbn:' + digits;
+  else if (byAuthor) query = `intitle:${byAuthor[1].trim()} inauthor:${byAuthor[2].trim()}`;
+  const url = 'https://www.googleapis.com/books/v1/volumes?' + new URLSearchParams({
+    q: query, maxResults: '25', printType: 'books'
+  });
+  const res = await jfetch(url, { headers: { 'User-Agent': 'Librarian/1.0' } }, 15000);
+  if (!res.ok) throw new Error('Google Books search failed (HTTP ' + res.status + ')');
+  const j = await res.json();
+  let results = (j.items || []).map(i => {
+    const v = i.volumeInfo || {};
+    return {
+      asin: i.id, // volume id — unique enough for dedupe
+      mediaType: 'ebook',
+      title: v.title || '',
+      subtitle: v.subtitle || '',
+      authors: v.authors || [],
+      narrators: [],
+      series: null,
+      runtimeMin: 0,
+      pages: v.pageCount || 0,
+      rating: v.averageRating || null,
+      releaseDate: v.publishedDate || '',
+      language: v.language || '',
+      summary: String(v.description || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim(),
+      cover: (v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || '').replace('http://', 'https://') || null
+    };
+  }).filter(b => b.title);
+  // reuse the same token ranking so the actual book beats keyword noise
+  return rankResults(q, [results]).slice(0, 24);
+}
+
+/* ---------------- Send-to-Kindle (email) ---------------- */
+
+function smtpTransport(cfg) {
+  const nodemailer = require('nodemailer');
+  const port = parseInt(cfg.port || '587', 10);
+  return nodemailer.createTransport({
+    host: (cfg.host || '').trim(),
+    port,
+    secure: port === 465,
+    auth: cfg.user ? { user: cfg.user, pass: cfg.pass || '' } : undefined
+  });
+}
+
+async function smtpTest(cfg) {
+  if (!cfg.host) throw new Error('Enter the SMTP server first');
+  await smtpTransport(cfg).verify();
+  return { ok: true, detail: 'Connected and authenticated to ' + cfg.host };
+}
+
+// Kindle only accepts EPUB and PDF by email (MOBI was retired by Amazon).
+const KINDLE_OK = new Set(['.epub', '.pdf']);
+
+async function sendToKindle(smtpCfg, kindleEmail, filePath, title) {
+  const path = require('path');
+  const fs = require('fs');
+  const ext = path.extname(filePath).toLowerCase();
+  if (!KINDLE_OK.has(ext)) {
+    throw new Error('Kindle only accepts EPUB or PDF by email — this book is ' + (ext || 'unknown') + '. Grab an EPUB release instead.');
+  }
+  const size = fs.statSync(filePath).size;
+  if (size > 50 * 1024 * 1024) throw new Error('File is over Amazon\'s 50 MB email limit');
+  const from = smtpCfg.from || smtpCfg.user;
+  await smtpTransport(smtpCfg).sendMail({
+    from,
+    to: kindleEmail,
+    subject: title,
+    text: 'Sent by Librarian',
+    attachments: [{ filename: path.basename(filePath), path: filePath }]
+  });
 }
 
 // Main search entry: handles ISBNs, runs a targeted title/author query when the user
@@ -417,5 +507,6 @@ module.exports = {
   prowlarrTest, prowlarrSearch,
   absTest, absLibraries, absScan, absLibraryItems,
   notify, notifySend, scoreRelease, pickBestRelease,
-  audibleSearch, searchBooks, discover
+  audibleSearch, searchBooks, googleBooksSearch,
+  smtpTest, sendToKindle, discover
 };

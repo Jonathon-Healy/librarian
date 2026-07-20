@@ -5,10 +5,12 @@
 const fs = require('fs');
 const path = require('path');
 const store = require('./store');
-const { qbitList, absScan, notify } = require('./integrations');
+const { qbitList, absScan, notify, sendToKindle } = require('./integrations');
 
 const AUDIO_EXT = new Set(['.m4b', '.mp3', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma', '.wav']);
-const EXTRA_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.pdf', '.cue', '.epub']);
+const EBOOK_EXT = new Set(['.epub', '.mobi', '.azw3', '.azw', '.pdf', '.cbz', '.cbr']);
+const EXTRA_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.cue']);
+const KINDLE_PREF = ['.epub', '.pdf', '.azw3', '.mobi']; // preference order for the "main" ebook file
 const PUID = parseInt(process.env.PUID || '99', 10);
 const PGID = parseInt(process.env.PGID || '100', 10);
 const DONE_STATES = new Set(['uploading', 'stalledUP', 'pausedUP', 'stoppedUP', 'queuedUP', 'forcedUP', 'checkingUP']);
@@ -51,32 +53,52 @@ function chownDeep(p) {
 }
 
 async function importItem(item, settings) {
+  const isEbook = item.mediaType === 'ebook';
   const src = mapPath(item.contentPath, settings);
   if (!src || !fs.existsSync(src)) {
     throw new Error('Download not visible to Librarian at "' + (src || '?')
       + '". Check that the Downloads mount matches qBittorrent\'s, or set Remote Path Mapping in Settings → Paths.');
   }
-  const libRoot = settings.paths.library || '/audiobooks';
-  if (!fs.existsSync(libRoot)) throw new Error('Library folder "' + libRoot + '" does not exist inside the container. Check the /audiobooks mount.');
+  const libRoot = isEbook ? (settings.paths.ebooks || '/ebooks') : (settings.paths.library || '/audiobooks');
+  if (!fs.existsSync(libRoot)) {
+    throw new Error((isEbook ? 'eBook' : 'Library') + ' folder "' + libRoot
+      + '" does not exist inside the container. Check the ' + (isEbook ? '/ebooks' : '/audiobooks') + ' mount.');
+  }
 
+  const MAIN_EXT = isEbook ? EBOOK_EXT : AUDIO_EXT;
   const destDir = path.join(libRoot, sanitize(item.author || 'Unknown Author'), sanitize(item.title || 'Unknown Title'));
   const stat = fs.statSync(src);
   const all = stat.isFile() ? [src] : [...walk(src)];
   const wanted = all.filter(f => {
     const ext = path.extname(f).toLowerCase();
-    return AUDIO_EXT.has(ext) || EXTRA_EXT.has(ext);
+    return MAIN_EXT.has(ext) || EXTRA_EXT.has(ext);
   });
-  const audio = wanted.filter(f => AUDIO_EXT.has(path.extname(f).toLowerCase()));
-  if (!audio.length) throw new Error('No audio files found in the completed download');
+  const mainFiles = wanted.filter(f => MAIN_EXT.has(path.extname(f).toLowerCase()));
+  if (!mainFiles.length) throw new Error('No ' + (isEbook ? 'ebook' : 'audio') + ' files found in the completed download');
 
   fs.mkdirSync(destDir, { recursive: true });
+  const copied = [];
   for (const f of wanted) {
     const rel = stat.isFile() ? path.basename(f) : path.relative(src, f);
     const target = path.join(destDir, rel);
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(f, target); // copy (not move) so the torrent keeps seeding
+    copied.push(target);
   }
   chownDeep(destDir);
+
+  if (isEbook) {
+    // remember the best single file for Send-to-Kindle (EPUB > PDF > AZW3 > MOBI, then largest)
+    const candidates = copied.filter(f => EBOOK_EXT.has(path.extname(f).toLowerCase()));
+    candidates.sort((a, b) => {
+      const pa = KINDLE_PREF.indexOf(path.extname(a).toLowerCase());
+      const pb = KINDLE_PREF.indexOf(path.extname(b).toLowerCase());
+      const ra = pa === -1 ? 99 : pa, rb = pb === -1 ? 99 : pb;
+      if (ra !== rb) return ra - rb;
+      return fs.statSync(b).size - fs.statSync(a).size;
+    });
+    item.ebookFile = candidates[0] || null;
+  }
   return destDir;
 }
 
@@ -138,11 +160,26 @@ async function tick() {
           item.status = 'imported';
           item.completedAt = Date.now();
           item.error = null;
-          if (s.abs.url && s.abs.libraryId) {
-            try { await absScan(s.abs, s.abs.libraryId); }
-            catch (e) { item.note = 'Imported, but the AudioBookShelf scan failed: ' + e.message; }
+          if (item.mediaType === 'ebook') {
+            notify(s.notify, 'eBook ready', `"${item.title}"${item.author ? ' by ' + item.author : ''} is on the server.`);
+            // auto Send-to-Kindle if the requester opted in
+            const requester = (data.users || []).find(u => u.username === item.requestedBy);
+            if (requester?.autoSendKindle && requester.kindleEmail && s.smtp.host && item.ebookFile) {
+              try {
+                await sendToKindle(s.smtp, requester.kindleEmail, item.ebookFile, item.title);
+                item.note = 'Sent to ' + requester.kindleEmail;
+                notify(s.notify, 'Sent to Kindle', `"${item.title}" is on its way to ${requester.kindleEmail}.`);
+              } catch (e) {
+                item.note = 'Kindle send failed: ' + e.message;
+              }
+            }
+          } else {
+            if (s.abs.url && s.abs.libraryId) {
+              try { await absScan(s.abs, s.abs.libraryId); }
+              catch (e) { item.note = 'Imported, but the AudioBookShelf scan failed: ' + e.message; }
+            }
+            notify(s.notify, 'Book ready', `"${item.title}"${item.author ? ' by ' + item.author : ''} is now in AudioBookShelf.`);
           }
-          notify(s.notify, 'Book ready', `"${item.title}"${item.author ? ' by ' + item.author : ''} is now in AudioBookShelf.`);
         } catch (e) {
           item.status = 'failed';
           item.error = e.message;

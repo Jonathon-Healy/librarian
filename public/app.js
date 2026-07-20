@@ -5,6 +5,7 @@ const $app = document.getElementById('app');
 const state = {
   user: null,
   view: 'search',
+  searchMode: 'audio', // 'audio' | 'ebook' — fully separate catalogs and indexer categories
   searchQuery: '',
   searchResults: null, // null = untouched, [] = no results
   searching: false,
@@ -270,15 +271,26 @@ async function refreshQueueBadge() {
 function renderSearch(c) {
   c.innerHTML = `
     <div class="view">
+      <div class="seg" style="margin-bottom:12px">
+        <button data-m="audio" class="${state.searchMode === 'audio' ? 'active' : ''}">🎧 Audiobooks</button>
+        <button data-m="ebook" class="${state.searchMode === 'ebook' ? 'active' : ''}">📖 eBooks</button>
+      </div>
       <div class="searchbar">
         <div class="searchwrap">
           ${IC.search}
-          <input class="input" id="q" type="search" placeholder="Title, author, series, or ISBN…" value="${esc(state.searchQuery)}" enterkeyhint="search">
+          <input class="input" id="q" type="search" placeholder="${state.searchMode === 'ebook' ? 'eBook title, author, or ISBN…' : 'Title, author, series, or ISBN…'}" value="${esc(state.searchQuery)}" enterkeyhint="search">
         </div>
         <button class="btn searchbtn" id="qgo">Search</button>
       </div>
       <div id="results"></div>
     </div>`;
+  c.querySelectorAll('.seg button[data-m]').forEach(b => b.onclick = () => {
+    if (state.searchMode === b.dataset.m) return;
+    state.searchMode = b.dataset.m;
+    state.searchResults = null;
+    renderSearch(c);
+    if (state.searchQuery) doSearch(state.searchQuery);
+  });
   const q = document.getElementById('q');
   let deb;
   q.addEventListener('input', () => { clearTimeout(deb); deb = setTimeout(() => doSearch(q.value), 550); });
@@ -291,10 +303,11 @@ async function doSearch(query) {
   query = query.trim();
   state.searchQuery = query;
   if (!query) { state.searchResults = null; paintResults(); return; }
+  const mode = state.searchMode;
   state.searching = true; paintResults();
   try {
-    const r = await api('/search?q=' + encodeURIComponent(query));
-    if (state.searchQuery !== query) return; // stale
+    const r = await api('/search?type=' + mode + '&q=' + encodeURIComponent(query));
+    if (state.searchQuery !== query || state.searchMode !== mode) return; // stale
     state.searchResults = r;
   } catch (e) {
     toast(e.message, false);
@@ -312,7 +325,9 @@ function paintResults() {
     return;
   }
   if (state.searchResults === null) {
-    el.innerHTML = `<div class="empty">${IC.book}<div class="big">Find your next listen</div>Search Audible's catalog, then grab a release from your indexers.</div>`;
+    el.innerHTML = state.searchMode === 'ebook'
+      ? `<div class="empty">${IC.book}<div class="big">Find your next read</div>Search for eBooks — they're stored on the server and can be sent straight to a Kindle.</div>`
+      : `<div class="empty">${IC.book}<div class="big">Find your next listen</div>Search Audible's catalog, then grab a release from your indexers.</div>`;
     return;
   }
   if (!state.searchResults.length) {
@@ -330,6 +345,8 @@ function paintResults() {
           ${b.series ? `<span class="pill series">${esc(b.series.title)}${b.series.sequence ? ' #' + esc(b.series.sequence) : ''}</span>` : ''}
           ${b.rating ? `<span class="pill rating">★ ${esc(b.rating)}</span>` : ''}
           ${b.runtimeMin ? `<span class="pill">${fmtRuntime(b.runtimeMin)}</span>` : ''}
+          ${b.pages ? `<span class="pill">${b.pages} pages</span>` : ''}
+          ${b.releaseDate && b.mediaType === 'ebook' ? `<span class="pill">${esc(String(b.releaseDate).slice(0, 4))}</span>` : ''}
         </div>
       </div>
     </div>`).join('') + '</div>';
@@ -362,7 +379,9 @@ function openBookSheet(book) {
         ${book.series ? `<span class="pill series">${esc(book.series.title)}${book.series.sequence ? ' #' + esc(book.series.sequence) : ''}</span>` : ''}
         ${book.rating ? `<span class="pill rating">★ ${esc(book.rating)}</span>` : ''}
         ${book.runtimeMin ? `<span class="pill">${fmtRuntime(book.runtimeMin)}</span>` : ''}
-        ${book.releaseDate ? `<span class="pill">${esc(book.releaseDate.slice(0, 4))}</span>` : ''}
+        ${book.pages ? `<span class="pill">${book.pages} pages</span>` : ''}
+        ${book.releaseDate ? `<span class="pill">${esc(String(book.releaseDate).slice(0, 4))}</span>` : ''}
+        <span class="pill">${book.mediaType === 'ebook' ? '📖 eBook' : '🎧 Audiobook'}</span>
       </div>
       ${book.summary ? `<div class="summary" id="summ">${esc(book.summary)}</div><button class="morebtn" id="more">Read more</button>` : ''}
       <button class="btn block" id="find">${IC.search} Find releases</button>
@@ -450,7 +469,7 @@ function openReleasePicker(item) {
       await api('/grab', {
         method: 'POST',
         body: {
-          book: { asin: item.asin, title: item.title, authors: (item.authors && item.authors.length) ? item.authors : [item.author], cover: item.cover },
+          book: { asin: item.asin, title: item.title, mediaType: item.mediaType || 'audio', authors: (item.authors && item.authors.length) ? item.authors : [item.author], cover: item.cover },
           release: rels[+btn.dataset.i],
           itemId: item.id
         }
@@ -516,7 +535,7 @@ function paintQueue(firstPaint = false) {
       ${q.cover ? `<img class="cover" src="${esc(q.cover)}" loading="lazy" alt="">` : '<div class="cover"></div>'}
       <div class="body">
         <div class="t">${esc(q.title)}</div>
-        <div class="s">${esc(q.author)}${q.requestedBy ? ' · added by ' + esc(q.requestedBy) : ''}</div>
+        <div class="s">${q.mediaType === 'ebook' ? '📖 ' : '🎧 '}${esc(q.author)}${q.requestedBy ? ' · added by ' + esc(q.requestedBy) : ''}</div>
         <div style="margin-top:7px"><span class="statuschip st-${q.status}"><span class="dot"></span>${STATUS_LABEL[q.status] || q.status}</span></div>
         ${q.status === 'searching' ? '<div class="ibar" style="margin-top:10px"></div>' : ''}
         ${q.status === 'wanted' ? '<div class="s" style="margin-top:6px">No releases yet — Librarian re-checks twice a day and will grab or flag it when one appears.</div>' : ''}
@@ -529,6 +548,7 @@ function paintQueue(firstPaint = false) {
           ${q.status === 'ready' ? `<button class="btn small" data-act="choose">Choose release</button>` : ''}
           ${q.status === 'failed' ? `<button class="btn small" data-act="retry">Retry</button>` : ''}
           ${q.status === 'wanted' ? `<button class="btn small ghost" data-act="retry">Search now</button>` : ''}
+          ${q.status === 'imported' && q.ebookFile ? `<button class="btn small ghost" data-act="kindle">Send to Kindle</button>` : ''}
           ${isAdmin && q.status !== 'searching' ? `<button class="btn small ghost" data-act="remove">Remove</button>` : ''}
         </div>
       </div>
@@ -536,9 +556,17 @@ function paintQueue(firstPaint = false) {
   el.querySelectorAll('[data-act]').forEach(btn => {
     const id = btn.closest('.qitem').dataset.id;
     const item = state.queue.find(q => q.id === id);
-    btn.onclick = () => {
+    btn.onclick = async () => {
       if (btn.dataset.act === 'choose') openReleasePicker(item);
       else if (btn.dataset.act === 'retry') retryItem(id, btn);
+      else if (btn.dataset.act === 'kindle') {
+        spinnerize(btn, true);
+        try {
+          await api('/queue/' + id + '/send-kindle', { method: 'POST' });
+          toast('On its way to your Kindle');
+        } catch (e) { toast(e.message, false); }
+        await refreshQueueBadge(); paintQueue();
+      }
       else confirmRemove(item);
     };
   });
@@ -647,6 +675,14 @@ function renderConnections(body) {
       <div class="field"><label>Notification URL</label><input class="input" id="nt-url" placeholder="https://ntfy.sh/your-topic" value="${esc(s.notify?.url || '')}"></div>
     `, 'notify')}
 
+    ${connCard('smtp', 'Email / Send-to-Kindle (optional)', 'Needed to email eBooks to Kindles. Use any SMTP account (a Gmail app-password works). IMPORTANT: Amazon only accepts documents from approved senders — each Kindle owner must add the "From" address below at amazon.com → Content Library → Preferences → Approved Personal Document E-mail List.', `
+      <div class="field"><label>SMTP server</label><input class="input" id="sm-host" placeholder="smtp.gmail.com" value="${esc(s.smtp?.host || '')}"></div>
+      <div class="field"><label>Port</label><input class="input" id="sm-port" placeholder="587" value="${esc(s.smtp?.port || '587')}"></div>
+      <div class="field"><label>Username</label><input class="input" id="sm-user" autocapitalize="off" value="${esc(s.smtp?.user || '')}"></div>
+      <div class="field"><label>Password</label><input class="input" id="sm-pass" type="password" placeholder="${secretPh(s.smtp?.pass)}"></div>
+      <div class="field"><label>From address (must be Kindle-approved)</label><input class="input" id="sm-from" placeholder="you@example.com" value="${esc(s.smtp?.from || '')}"></div>
+    `, 'smtp')}
+
     ${connCard('abs', 'AudioBookShelf', 'Your library server. Get an API token in AudioBookShelf under Settings → Users → your user → API Token.', `
       <div class="field"><label>URL</label><input class="input" id="ab-url" placeholder="http://192.168.1.10:13378" value="${esc(s.abs.url)}"></div>
       <div class="field"><label>API token</label><input class="input" id="ab-key" type="password" placeholder="${secretPh(s.abs.apiKey)}"></div>
@@ -662,6 +698,13 @@ function renderConnections(body) {
 
   const grabCfg = svc => {
     if (svc === 'notify') return { url: body.querySelector('#nt-url').value.trim() };
+    if (svc === 'smtp') return {
+      host: body.querySelector('#sm-host').value.trim(),
+      port: body.querySelector('#sm-port').value.trim() || '587',
+      user: body.querySelector('#sm-user').value.trim(),
+      pass: body.querySelector('#sm-pass').value || (s.smtp?.pass ? '__KEEP__' : ''),
+      from: body.querySelector('#sm-from').value.trim()
+    };
     if (svc === 'qbit') return {
       url: body.querySelector('#qb-url').value.trim(),
       username: body.querySelector('#qb-user').value.trim(),
@@ -731,7 +774,7 @@ function renderConnections(body) {
     try {
       state.settings = await api('/settings', {
         method: 'PUT',
-        body: { qbit: grabCfg('qbit'), prowlarr: grabCfg('prowlarr'), abs: grabCfg('abs'), notify: grabCfg('notify') }
+        body: { qbit: grabCfg('qbit'), prowlarr: grabCfg('prowlarr'), abs: grabCfg('abs'), notify: grabCfg('notify'), smtp: grabCfg('smtp') }
       });
       toast('Connections saved');
     } catch (err) { toast(err.message, false); }
@@ -749,6 +792,16 @@ function renderPaths(body) {
         <div class="pathrow">
           <input class="input" id="p-lib" value="${esc(s.paths.library)}">
           <button class="btn ghost small" data-browse="p-lib" style="flex:none">${IC.folder} Browse</button>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h3>eBook library</h3>
+      <p class="hint">Where finished eBooks go, organized as Author/Title (mounted at /ebooks in the Librarian container).</p>
+      <div class="field"><label>eBook folder</label>
+        <div class="pathrow">
+          <input class="input" id="p-ebooks" value="${esc(s.paths.ebooks || '/ebooks')}">
+          <button class="btn ghost small" data-browse="p-ebooks" style="flex:none">${IC.folder} Browse</button>
         </div>
       </div>
     </div>
@@ -778,7 +831,10 @@ function renderPaths(body) {
       state.settings = await api('/settings', {
         method: 'PUT',
         body: {
-          paths: { library: body.querySelector('#p-lib').value.trim() || '/audiobooks' },
+          paths: {
+            library: body.querySelector('#p-lib').value.trim() || '/audiobooks',
+            ebooks: body.querySelector('#p-ebooks').value.trim() || '/ebooks'
+          },
           pathMap: { remote: body.querySelector('#p-remote').value.trim(), local: body.querySelector('#p-local').value.trim() }
         }
       });
@@ -911,7 +967,28 @@ function renderProfile(body) {
       <div class="field"><label>New password</label><input class="input" id="npw" type="password" autocomplete="new-password" placeholder="At least 8 characters"></div>
       <button class="btn small" id="chpw">Change password</button>
     </div>
+    <div class="card">
+      <h3>Kindle</h3>
+      <p class="hint">eBooks can be emailed straight to your Kindle. Find your @kindle.com address at amazon.com → Content Library → Preferences → Personal Document Settings — and make sure Librarian's "From" address (set by the admin under Connections) is on your Approved Senders list there.</p>
+      <div class="field"><label>Your Kindle email</label><input class="input" id="ke" type="email" autocapitalize="off" placeholder="yourname_123@kindle.com" value="${esc(state.user.kindleEmail || '')}"></div>
+      <label class="checkrow"><input type="checkbox" id="kauto" ${state.user.autoSendKindle ? 'checked' : ''}> Automatically send my eBooks to this Kindle when they finish</label>
+      <button class="btn small" id="ksave" style="margin-top:12px">Save Kindle settings</button>
+    </div>
     <button class="btn ghost block" id="out">Sign out</button>`;
+  body.querySelector('#ksave').onclick = async e => {
+    const btn = e.currentTarget;
+    spinnerize(btn, true);
+    try {
+      const r = await api('/me/kindle', {
+        method: 'POST',
+        body: { kindleEmail: body.querySelector('#ke').value.trim(), autoSendKindle: body.querySelector('#kauto').checked }
+      });
+      state.user.kindleEmail = r.kindleEmail;
+      state.user.autoSendKindle = r.autoSendKindle;
+      toast(r.autoSendKindle ? 'Saved — new eBooks will land on your Kindle automatically' : 'Kindle settings saved');
+    } catch (err) { toast(err.message, false); }
+    spinnerize(btn, false);
+  };
   body.querySelector('#ap').onchange = async e => {
     try {
       const r = await api('/me/autopick', { method: 'POST', body: { enabled: e.target.checked } });

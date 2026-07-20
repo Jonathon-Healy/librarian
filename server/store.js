@@ -16,9 +16,10 @@ const defaults = () => ({
     qbit: { url: '', username: '', password: '', category: 'librarian' },
     prowlarr: { url: '', apiKey: '' },
     abs: { url: '', apiKey: '', libraryId: '', libraryName: '' },
-    paths: { library: '/audiobooks' },
+    paths: { library: '/audiobooks', ebooks: '/ebooks' },
     pathMap: { remote: '', local: '' }, // qBittorrent path prefix -> Librarian path prefix
     notify: { url: '' }, // optional: ntfy / Discord webhook / Gotify URL
+    smtp: { host: '', port: '587', user: '', pass: '', from: '' }, // for Send-to-Kindle email
   }
 });
 
