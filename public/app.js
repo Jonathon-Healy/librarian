@@ -685,9 +685,9 @@ function renderConnections(body) {
       <div class="field"><label>Category</label><input class="input" id="qb-cat" value="${esc(s.qbit.category || 'librarian')}"></div>
     `, 'qbit')}
 
-    ${connCard('abb', 'AudioBookBay (built-in)', 'Librarian searches AudioBookBay directly — no Prowlarr indexer needed. It\'s tried FIRST for every audiobook; Prowlarr is the fallback when it finds nothing. If the site stops responding, swap in a mirror URL (audiobookbay.lu / audiobookbay.is).', `
+    ${connCard('abb', 'AudioBookBay (built-in)', 'Librarian searches AudioBookBay directly — no Prowlarr indexer needed. It\'s tried FIRST for every audiobook; Prowlarr is the fallback when it finds nothing. The site rotates domains, so list several mirrors — Librarian tries them in order and remembers the one that works.', `
       <label class="checkrow" style="margin:0 0 12px"><input type="checkbox" id="bb-en" ${s.abb?.enabled !== false ? 'checked' : ''}> Search AudioBookBay first for audiobooks</label>
-      <div class="field"><label>Site URL</label><input class="input" id="bb-url" placeholder="https://audiobookbay.lu" value="${esc(s.abb?.url || 'https://audiobookbay.lu')}"></div>
+      <div class="field"><label>Mirror URLs (comma-separated)</label><input class="input" id="bb-url" placeholder="https://audiobookbay.lu, https://audiobookbay.is" value="${esc(s.abb?.url || '')}"></div>
     `, 'abb')}
 
     ${connCard('prowlarr', 'Prowlarr', 'Your indexer hub. Find the API key in Prowlarr under Settings → General → API Key.', `
@@ -726,7 +726,7 @@ function renderConnections(body) {
     if (svc === 'notify') return { url: body.querySelector('#nt-url').value.trim() };
     if (svc === 'abb') return {
       enabled: body.querySelector('#bb-en').checked,
-      url: body.querySelector('#bb-url').value.trim() || 'https://audiobookbay.lu'
+      url: body.querySelector('#bb-url').value.trim() || 'https://audiobookbay.lu, https://audiobookbay.is'
     };
     if (svc === 'smtp') return {
       host: body.querySelector('#sm-host').value.trim(),

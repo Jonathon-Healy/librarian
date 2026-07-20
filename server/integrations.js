@@ -207,10 +207,10 @@ function parseHumanSize(str) {
   return Math.round(parseFloat(m[1].replace(/,/g, '')) * mult);
 }
 
-async function abbSearch(cfg, query) {
-  const base = clean(cfg.url || 'https://audiobookbay.lu');
+// Search a single ABB mirror
+async function abbSearchOne(base, query) {
   const url = base + '/?s=' + encodeURIComponent(query.toLowerCase());
-  const res = await jfetch(url, { headers: BROWSER_HEADERS }, 20000);
+  const res = await jfetch(url, { headers: BROWSER_HEADERS }, 12000);
   if (!res.ok) throw new Error('AudioBookBay answered HTTP ' + res.status);
   const html = await res.text();
   const releases = [];
@@ -245,6 +245,31 @@ async function abbSearch(cfg, query) {
   return releases;
 }
 
+// ABB mirrors come and go — the URL setting is a comma-separated list, tried in order.
+// The last mirror that answered is remembered and tried first next time.
+function abbBases(cfg) {
+  return [...new Set(String(cfg.url || 'https://audiobookbay.lu')
+    .split(',').map(s => clean(s.trim())).filter(Boolean))];
+}
+let abbGoodBase = null;
+
+async function abbSearch(cfg, query) {
+  const bases = abbBases(cfg);
+  if (abbGoodBase && bases.includes(abbGoodBase)) {
+    bases.splice(bases.indexOf(abbGoodBase), 1);
+    bases.unshift(abbGoodBase);
+  }
+  let lastErr = null;
+  for (const base of bases) {
+    try {
+      const rels = await abbSearchOne(base, query);
+      abbGoodBase = base;
+      return rels;
+    } catch (e) { lastErr = e; }
+  }
+  throw lastErr || new Error('No AudioBookBay mirror configured');
+}
+
 const DEFAULT_TRACKERS = [
   'udp://tracker.opentrackr.org:1337/announce',
   'udp://open.stealth.si:80/announce',
@@ -272,9 +297,22 @@ async function abbResolveMagnet(pageUrl, title) {
 }
 
 async function abbTest(cfg) {
-  const r = await abbSearch(cfg, 'the martian');
-  if (!r.length) return { ok: true, detail: 'Site reachable, but a test search returned nothing — the mirror may be geo-blocked or its layout changed. Try another mirror URL (e.g. audiobookbay.is).' };
-  return { ok: true, detail: 'Connected — test search returned ' + r.length + ' results' };
+  const errors = [];
+  for (const base of abbBases(cfg)) {
+    try {
+      const r = await abbSearchOne(base, 'the martian');
+      abbGoodBase = base;
+      return {
+        ok: true,
+        detail: 'Connected via ' + base.replace(/^https?:\/\//, '')
+          + (r.length ? ' — test search returned ' + r.length + ' results' : ' (reachable, but the test search parsed nothing — the site layout may have changed)')
+      };
+    } catch (e) {
+      errors.push(base.replace(/^https?:\/\//, '') + ': ' + e.message.replace('Could not connect', 'unreachable'));
+    }
+  }
+  throw new Error('No mirror responded — ' + errors.join(' · ')
+    + '. ABB rotates domains: find a currently-working mirror in a browser and add its URL here. If ALL mirrors time out from the server but work in your browser, your server\'s DNS may be blocking them — try setting unraid\'s DNS to 1.1.1.1 (Settings → Network Settings).');
 }
 
 /* ---------------- AudioBookShelf ---------------- */
