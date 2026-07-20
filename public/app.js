@@ -432,6 +432,7 @@ function relRow(rel, i) {
     <div style="flex:1;min-width:0">
       <div class="rt">${esc(rel.title)}</div>
       <div class="rm">
+        ${rel.preferred ? '<span class="pill" style="color:var(--accent)">★</span>' : ''}
         <span class="pill"><span class="seeds ${cls}">${rel.seeders}</span>&nbsp;seeders</span>
         <span class="pill">${fmtSize(rel.size)}</span>
         <span class="pill">${esc(rel.indexer)}</span>
@@ -530,7 +531,7 @@ function paintQueue(firstPaint = false) {
   }
   const anim = firstPaint ? '' : ' noanim';
   const isAdmin = state.user.role === 'admin';
-  el.innerHTML = state.queue.map(q => `
+  const tile = q => `
     <div class="qitem${anim}" data-id="${q.id}">
       ${q.cover ? `<img class="cover" src="${esc(q.cover)}" loading="lazy" alt="">` : '<div class="cover"></div>'}
       <div class="body">
@@ -552,7 +553,12 @@ function paintQueue(firstPaint = false) {
           ${isAdmin && q.status !== 'searching' ? `<button class="btn small ghost" data-act="remove">Remove</button>` : ''}
         </div>
       </div>
-    </div>`).join('');
+    </div>`;
+  el.innerHTML = [['audio', '🎧 Audiobooks'], ['ebook', '📖 eBooks']].map(([mt, label]) => {
+    const items = state.queue.filter(q => (q.mediaType || 'audio') === mt);
+    if (!items.length) return '';
+    return `<div class="qsection">${label}</div>` + items.map(tile).join('');
+  }).join('');
   el.querySelectorAll('[data-act]').forEach(btn => {
     const id = btn.closest('.qitem').dataset.id;
     const item = state.queue.find(q => q.id === id);
@@ -669,6 +675,8 @@ function renderConnections(body) {
     ${connCard('prowlarr', 'Prowlarr', 'Your indexer hub. Find the API key in Prowlarr under Settings → General → API Key.', `
       <div class="field"><label>URL</label><input class="input" id="pr-url" placeholder="http://192.168.1.10:9696" value="${esc(s.prowlarr.url)}"></div>
       <div class="field"><label>API key</label><input class="input" id="pr-key" type="password" placeholder="${secretPh(s.prowlarr.apiKey)}"></div>
+      <div class="field"><label>Preferred indexers (optional)</label><input class="input" id="pr-pref" placeholder="AudioBookBay, MyAnonamouse" value="${esc(s.prowlarr.preferred || '')}"></div>
+      <p class="hint" style="margin-top:-4px">Comma-separated indexer names (as shown in Prowlarr). Their releases are listed first (★) and win auto-pick.</p>
     `, 'prowlarr')}
 
     ${connCard('notify', 'Notifications (optional)', 'Get a push when a book is imported, fails, or is ready for selection. Paste an ntfy topic URL (e.g. https://ntfy.sh/my-librarian), a Discord webhook URL, or a Gotify message URL.', `
@@ -713,7 +721,8 @@ function renderConnections(body) {
     };
     if (svc === 'prowlarr') return {
       url: body.querySelector('#pr-url').value.trim(),
-      apiKey: body.querySelector('#pr-key').value || (s.prowlarr.apiKey ? '__KEEP__' : '')
+      apiKey: body.querySelector('#pr-key').value || (s.prowlarr.apiKey ? '__KEEP__' : ''),
+      preferred: body.querySelector('#pr-pref').value.trim()
     };
     const sel = body.querySelector('#ab-lib');
     return {

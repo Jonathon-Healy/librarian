@@ -305,6 +305,8 @@ a { color: var(--accent); text-decoration: none; }
   font-size: 13px; font-weight: 600; margin-bottom: 12px;
   animation: fadeUp .25s ease both;
 }
+.qsection { font-size: 13px; font-weight: 800; color: var(--muted); letter-spacing: .4px; text-transform: uppercase; margin: 18px 2px 10px; }
+.qsection:first-child { margin-top: 2px; }
 .qitem { display: flex; gap: 13px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); padding: 13px; margin-bottom: 10px; animation: fadeUp .3s ease both; }
 .qitem.noanim { animation: none; }
 .qitem .t, .qitem .s { overflow-wrap: anywhere; }

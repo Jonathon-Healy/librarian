@@ -174,6 +174,8 @@ async function prowlarrSearch(cfg, query, mediaType = 'audio') {
   if (res.status === 401) throw new Error('Prowlarr rejected the API key');
   if (!res.ok) throw new Error('Prowlarr search failed (HTTP ' + res.status + ')');
   const items = await res.json();
+  // Preferred indexers (e.g. "AudioBookBay") float to the top and win auto-pick ties
+  const preferred = String(cfg.preferred || '').split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
   return (Array.isArray(items) ? items : [])
     .filter(r => (r.protocol || '').toLowerCase() === 'torrent')
     .map(r => ({
@@ -183,11 +185,12 @@ async function prowlarrSearch(cfg, query, mediaType = 'audio') {
       seeders: r.seeders ?? 0,
       leechers: r.leechers ?? 0,
       indexer: r.indexer || '',
+      preferred: preferred.some(p => (r.indexer || '').toLowerCase().includes(p)),
       publishDate: r.publishDate || null,
       link: r.magnetUrl || r.downloadUrl || r.guid
     }))
     .filter(r => r.link)
-    .sort((a, b) => b.seeders - a.seeders);
+    .sort((a, b) => (b.preferred - a.preferred) || (b.seeders - a.seeders));
 }
 
 /* ---------------- AudioBookShelf ---------------- */
@@ -272,13 +275,18 @@ function scoreRelease(r, mediaType = 'audio') {
     if (gb >= 0.05 && gb <= 4) s += 1;    // sane audiobook size
   }
   s += Math.min(r.seeders || 0, 20) / 10; // up to +2 for healthy swarms
+  if (r.preferred) s += 1.5;              // user-preferred indexer (e.g. AudioBookBay)
   return s;
 }
 
 function pickBestRelease(list, mediaType = 'audio') {
   const seeded = (list || []).filter(r => (r.seeders || 0) > 0);
   if (!seeded.length) return null;
-  return seeded.reduce((a, b) => (scoreRelease(b, mediaType) > scoreRelease(a, mediaType) ? b : a));
+  // Preferred indexers are the FIRST source: if any preferred release is seeded,
+  // auto-pick chooses among those only; others are just the fallback.
+  const preferred = seeded.filter(r => r.preferred);
+  const pool = preferred.length ? preferred : seeded;
+  return pool.reduce((a, b) => (scoreRelease(b, mediaType) > scoreRelease(a, mediaType) ? b : a));
 }
 
 /* ---------------- Audible metadata ---------------- */

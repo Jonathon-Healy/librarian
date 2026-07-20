@@ -14,7 +14,7 @@ const defaults = () => ({
   queue: [],     // download/import queue items
   settings: {
     qbit: { url: '', username: '', password: '', category: 'librarian' },
-    prowlarr: { url: '', apiKey: '' },
+    prowlarr: { url: '', apiKey: '', preferred: '' }, // preferred: comma-separated indexer names listed/picked first
     abs: { url: '', apiKey: '', libraryId: '', libraryName: '' },
     paths: { library: '/audiobooks', ebooks: '/ebooks' },
     pathMap: { remote: '', local: '' }, // qBittorrent path prefix -> Librarian path prefix

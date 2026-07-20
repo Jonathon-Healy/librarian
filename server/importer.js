@@ -8,7 +8,7 @@ const store = require('./store');
 const { qbitList, absScan, notify, sendToKindle } = require('./integrations');
 
 const AUDIO_EXT = new Set(['.m4b', '.mp3', '.m4a', '.flac', '.ogg', '.opus', '.aac', '.wma', '.wav']);
-const EBOOK_EXT = new Set(['.epub', '.mobi', '.azw3', '.azw', '.pdf', '.cbz', '.cbr']);
+const EBOOK_EXT = new Set(['.epub', '.mobi', '.azw3', '.azw', '.azw4', '.pdf', '.fb2', '.djvu', '.lit', '.prc', '.rtf', '.chm', '.htmlz', '.cbz', '.cbr']);
 const EXTRA_EXT = new Set(['.jpg', '.jpeg', '.png', '.webp', '.cue']);
 const KINDLE_PREF = ['.epub', '.pdf', '.azw3', '.mobi']; // preference order for the "main" ebook file
 const PUID = parseInt(process.env.PUID || '99', 10);
@@ -74,7 +74,28 @@ async function importItem(item, settings) {
     return MAIN_EXT.has(ext) || EXTRA_EXT.has(ext);
   });
   const mainFiles = wanted.filter(f => MAIN_EXT.has(path.extname(f).toLowerCase()));
-  if (!mainFiles.length) throw new Error('No ' + (isEbook ? 'ebook' : 'audio') + ' files found in the completed download');
+
+  // Ebook torrents often ship the book inside a ZIP — pre-scan archives for ebook entries
+  // so we know we have something to import before creating the library folder.
+  let zipPlan = []; // [{ zipPath, entries: [entryName] }]
+  if (isEbook && !mainFiles.length) {
+    const AdmZip = require('adm-zip');
+    for (const z of all.filter(f => path.extname(f).toLowerCase() === '.zip')) {
+      try {
+        const entries = new AdmZip(z).getEntries()
+          .filter(e => !e.isDirectory && EBOOK_EXT.has(path.extname(e.entryName).toLowerCase()))
+          .map(e => e.entryName);
+        if (entries.length) zipPlan.push({ zipPath: z, entries });
+      } catch { /* unreadable archive — ignore */ }
+    }
+  }
+
+  if (!mainFiles.length && !zipPlan.length) {
+    const present = [...new Set(all.map(f => path.extname(f).toLowerCase()).filter(Boolean))].join(', ') || 'none';
+    const hasRar = all.some(f => /\.r(ar|\d\d)$/i.test(f));
+    throw new Error('No ' + (isEbook ? 'ebook' : 'audio') + ' files found in the download (file types present: ' + present + ').'
+      + (hasRar ? ' The book is packed in a RAR archive, which Librarian can\'t unpack — grab a different release' + (isEbook ? ' (EPUB preferred)' : '') + '.' : ''));
+  }
 
   fs.mkdirSync(destDir, { recursive: true });
   const copied = [];
@@ -84,6 +105,19 @@ async function importItem(item, settings) {
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(f, target); // copy (not move) so the torrent keeps seeding
     copied.push(target);
+  }
+  // Extract ebook files straight out of ZIPs into the library folder
+  if (zipPlan.length) {
+    const AdmZip = require('adm-zip');
+    for (const { zipPath, entries } of zipPlan) {
+      try {
+        const zip = new AdmZip(zipPath);
+        for (const name of entries) {
+          zip.extractEntryTo(name, destDir, false, true);
+          copied.push(path.join(destDir, path.basename(name)));
+        }
+      } catch { /* skip bad archive */ }
+    }
   }
   chownDeep(destDir);
 
