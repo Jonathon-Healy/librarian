@@ -447,7 +447,7 @@ async function performGrab(item, release) {
   if (!release?.link) throw new Error('That release has no usable download link');
   // AudioBookBay releases carry a details-page link — resolve it to a magnet now
   if (release.abb && !String(release.link).startsWith('magnet:')) {
-    release = { ...release, link: await I.abbResolveMagnet(release.link, item.title) };
+    release = { ...release, link: await I.abbResolveMagnet(release.link, item.title, s.abb?.proxy) };
   }
   const tag = 'librarian-' + item.id;
   await I.qbitEnsureCategory(s.qbit);

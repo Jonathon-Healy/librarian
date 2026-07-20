@@ -688,6 +688,8 @@ function renderConnections(body) {
     ${connCard('abb', 'AudioBookBay (built-in)', 'Librarian searches AudioBookBay directly — no Prowlarr indexer needed. It\'s tried FIRST for every audiobook; Prowlarr is the fallback when it finds nothing. The site rotates domains, so list several mirrors — Librarian tries them in order and remembers the one that works.', `
       <label class="checkrow" style="margin:0 0 12px"><input type="checkbox" id="bb-en" ${s.abb?.enabled !== false ? 'checked' : ''}> Search AudioBookBay first for audiobooks</label>
       <div class="field"><label>Mirror URLs (comma-separated)</label><input class="input" id="bb-url" placeholder="https://audiobookbay.lu, https://audiobookbay.is" value="${esc(s.abb?.url || '')}"></div>
+      <div class="field"><label>VPN proxy (optional)</label><input class="input" id="bb-proxy" placeholder="http://192.168.1.69:8118" value="${esc(s.abb?.proxy || '')}"></div>
+      <p class="hint" style="margin-top:-4px">If your ISP blocks AudioBookBay, route just its traffic through a VPN proxy. Using binhex-qbittorrentvpn? Set its <b>ENABLE_PRIVOXY=yes</b> and enter <b>http://&lt;server-ip&gt;:8118</b> here — ABB then rides your existing VPN.</p>
     `, 'abb')}
 
     ${connCard('prowlarr', 'Prowlarr', 'Your indexer hub. Find the API key in Prowlarr under Settings → General → API Key.', `
@@ -726,7 +728,8 @@ function renderConnections(body) {
     if (svc === 'notify') return { url: body.querySelector('#nt-url').value.trim() };
     if (svc === 'abb') return {
       enabled: body.querySelector('#bb-en').checked,
-      url: body.querySelector('#bb-url').value.trim() || 'https://audiobookbay.lu, https://audiobookbay.is'
+      url: body.querySelector('#bb-url').value.trim() || 'https://audiobookbay.lu, https://audiobookbay.is',
+      proxy: body.querySelector('#bb-proxy').value.trim()
     };
     if (svc === 'smtp') return {
       host: body.querySelector('#sm-host').value.trim(),

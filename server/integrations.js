@@ -4,11 +4,15 @@
 
 const DEFAULT_TIMEOUT = 12000;
 
+// Use undici's fetch (bundled dep) so a ProxyAgent dispatcher is always recognized —
+// Node's built-in fetch rejects dispatchers from a separately-installed undici copy.
+const { fetch: uFetch } = require('undici');
+
 async function jfetch(url, opts = {}, timeout = DEFAULT_TIMEOUT) {
   const ctrl = new AbortController();
   const t = setTimeout(() => ctrl.abort(), timeout);
   try {
-    return await fetch(url, { ...opts, signal: ctrl.signal });
+    return await uFetch(url, { ...opts, signal: ctrl.signal });
   } catch (e) {
     if (e.name === 'AbortError') throw new Error('Connection timed out — is the URL reachable from the Librarian container?');
     throw new Error('Could not connect (' + (e.cause?.code || e.message) + ')');
@@ -200,6 +204,21 @@ const BROWSER_HEADERS = {
   'Accept': 'text/html,application/xhtml+xml'
 };
 
+// Optional HTTP proxy (e.g. the Privoxy inside a VPN container) so ABB traffic exits
+// through the VPN. Cached per proxy URL. Returns fetch opts with an undici dispatcher.
+const proxyAgents = new Map();
+function proxyOpts(proxyUrl) {
+  const p = (proxyUrl || '').trim();
+  if (!p) return {};
+  let agent = proxyAgents.get(p);
+  if (!agent) {
+    const { ProxyAgent } = require('undici');
+    agent = new ProxyAgent(p.match(/^\w+:\/\//) ? p : 'http://' + p);
+    proxyAgents.set(p, agent);
+  }
+  return { dispatcher: agent };
+}
+
 function parseHumanSize(str) {
   const m = String(str || '').match(/([\d.,]+)\s*(GB|MB|KB)/i);
   if (!m) return 0;
@@ -208,9 +227,9 @@ function parseHumanSize(str) {
 }
 
 // Search a single ABB mirror
-async function abbSearchOne(base, query) {
+async function abbSearchOne(base, query, proxy) {
   const url = base + '/?s=' + encodeURIComponent(query.toLowerCase());
-  const res = await jfetch(url, { headers: BROWSER_HEADERS }, 12000);
+  const res = await jfetch(url, { headers: BROWSER_HEADERS, ...proxyOpts(proxy) }, 15000);
   if (!res.ok) throw new Error('AudioBookBay answered HTTP ' + res.status);
   const html = await res.text();
   const releases = [];
@@ -262,7 +281,7 @@ async function abbSearch(cfg, query) {
   let lastErr = null;
   for (const base of bases) {
     try {
-      const rels = await abbSearchOne(base, query);
+      const rels = await abbSearchOne(base, query, cfg.proxy);
       abbGoodBase = base;
       return rels;
     } catch (e) { lastErr = e; }
@@ -278,8 +297,8 @@ const DEFAULT_TRACKERS = [
 ];
 
 // ABB detail pages list the torrent's info hash (and usually trackers) — build a magnet.
-async function abbResolveMagnet(pageUrl, title) {
-  const res = await jfetch(pageUrl, { headers: BROWSER_HEADERS }, 20000);
+async function abbResolveMagnet(pageUrl, title, proxy) {
+  const res = await jfetch(pageUrl, { headers: BROWSER_HEADERS, ...proxyOpts(proxy) }, 20000);
   if (!res.ok) throw new Error('AudioBookBay page fetch failed (HTTP ' + res.status + ')');
   const html = await res.text();
   const direct = html.match(/magnet:\?xt=urn:btih:[^"'\s<]+/i);
@@ -298,21 +317,24 @@ async function abbResolveMagnet(pageUrl, title) {
 
 async function abbTest(cfg) {
   const errors = [];
+  const via = cfg.proxy ? ' (via proxy)' : '';
   for (const base of abbBases(cfg)) {
     try {
-      const r = await abbSearchOne(base, 'the martian');
+      const r = await abbSearchOne(base, 'the martian', cfg.proxy);
       abbGoodBase = base;
       return {
         ok: true,
-        detail: 'Connected via ' + base.replace(/^https?:\/\//, '')
+        detail: 'Connected via ' + base.replace(/^https?:\/\//, '') + via
           + (r.length ? ' — test search returned ' + r.length + ' results' : ' (reachable, but the test search parsed nothing — the site layout may have changed)')
       };
     } catch (e) {
       errors.push(base.replace(/^https?:\/\//, '') + ': ' + e.message.replace('Could not connect', 'unreachable'));
     }
   }
-  throw new Error('No mirror responded — ' + errors.join(' · ')
-    + '. ABB rotates domains: find a currently-working mirror in a browser and add its URL here. If ALL mirrors time out from the server but work in your browser, your server\'s DNS may be blocking them — try setting unraid\'s DNS to 1.1.1.1 (Settings → Network Settings).');
+  throw new Error('No mirror responded' + via + ' — ' + errors.join(' · ')
+    + (cfg.proxy
+      ? '. Check the proxy is reachable and running inside the VPN (in binhex-qbittorrentvpn set ENABLE_PRIVOXY=yes; the proxy is http://<server-ip>:8118).'
+      : '. Your ISP appears to block AudioBookBay. Set a VPN proxy below to route ABB through your VPN.'));
 }
 
 /* ---------------- AudioBookShelf ---------------- */
