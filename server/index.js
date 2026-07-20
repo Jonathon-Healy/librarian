@@ -417,8 +417,8 @@ app.get('/api/search', wrap(async (req, res) => {
   const q = String(req.query.q || '').trim();
   if (!q) return res.json([]);
   if (req.query.type === 'ebook') {
-    // ebooks: Google Books metadata — completely separate source from audiobooks
-    return res.json(await I.googleBooksSearch(q));
+    // ebooks: Google Books (OpenLibrary fallback) — completely separate source from audiobooks
+    return res.json(await I.ebookSearch(q));
   }
   const results = await I.searchBooks(q);
   for (const b of results) b.mediaType = 'audio';

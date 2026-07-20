@@ -349,9 +349,9 @@ async function isbnLookup(isbn) {
   return [v.title, (v.authors || [])[0]].filter(Boolean).join(' ');
 }
 
-/* ---------------- Google Books (ebook metadata) ---------------- */
+/* ---------------- eBook metadata: Google Books, OpenLibrary fallback ---------------- */
 
-async function googleBooksSearch(q) {
+async function googleBooksQuery(q) {
   let query = q;
   const digits = q.replace(/[-\s]/g, '');
   const byAuthor = q.match(/^(.{2,}?)\s+by\s+(.{2,})$/i);
@@ -361,9 +361,13 @@ async function googleBooksSearch(q) {
     q: query, maxResults: '25', printType: 'books'
   });
   const res = await jfetch(url, { headers: { 'User-Agent': 'Librarian/1.0' } }, 15000);
-  if (!res.ok) throw new Error('Google Books search failed (HTTP ' + res.status + ')');
+  if (!res.ok) {
+    const e = new Error('Google Books search failed (HTTP ' + res.status + ')');
+    e.rateLimited = res.status === 429 || res.status === 403;
+    throw e;
+  }
   const j = await res.json();
-  let results = (j.items || []).map(i => {
+  return (j.items || []).map(i => {
     const v = i.volumeInfo || {};
     return {
       asin: i.id, // volume id — unique enough for dedupe
@@ -382,8 +386,54 @@ async function googleBooksSearch(q) {
       cover: (v.imageLinks?.thumbnail || v.imageLinks?.smallThumbnail || '').replace('http://', 'https://') || null
     };
   }).filter(b => b.title);
-  // reuse the same token ranking so the actual book beats keyword noise
-  return rankResults(q, [results]).slice(0, 24);
+}
+
+async function openLibraryQuery(q) {
+  const url = 'https://openlibrary.org/search.json?' + new URLSearchParams({
+    q, limit: '25', fields: 'key,title,subtitle,author_name,first_publish_year,cover_i,language,number_of_pages_median'
+  });
+  const res = await jfetch(url, { headers: { 'User-Agent': 'Librarian/1.0' } }, 15000);
+  if (!res.ok) throw new Error('OpenLibrary search failed (HTTP ' + res.status + ')');
+  const j = await res.json();
+  return (j.docs || []).map(d => ({
+    asin: d.key, // e.g. /works/OL123W
+    mediaType: 'ebook',
+    title: d.title || '',
+    subtitle: d.subtitle || '',
+    authors: d.author_name || [],
+    narrators: [],
+    series: null,
+    runtimeMin: 0,
+    pages: d.number_of_pages_median || 0,
+    rating: null,
+    releaseDate: d.first_publish_year ? String(d.first_publish_year) : '',
+    language: (d.language || [])[0] || '',
+    summary: '',
+    cover: d.cover_i ? `https://covers.openlibrary.org/b/id/${d.cover_i}-M.jpg` : null
+  })).filter(b => b.title);
+}
+
+// Cache identical ebook queries for 10 minutes — the live-search debounce can fire
+// several requests per minute, and Google throttles anonymous callers per IP.
+const ebookCache = new Map(); // q(lower) -> { at, results }
+const EBOOK_CACHE_MS = 10 * 60 * 1000;
+
+async function ebookSearch(q) {
+  const key = q.toLowerCase().trim();
+  const hit = ebookCache.get(key);
+  if (hit && Date.now() - hit.at < EBOOK_CACHE_MS) return hit.results;
+  let raw;
+  try {
+    raw = await googleBooksQuery(q);
+  } catch (e) {
+    // Rate-limited (or otherwise refused) by Google — OpenLibrary answers instead.
+    try { raw = await openLibraryQuery(q); }
+    catch { throw e.rateLimited ? new Error('Google Books is rate-limiting this server and OpenLibrary is unreachable — wait a minute and try again') : e; }
+  }
+  const results = rankResults(q, [raw]).slice(0, 24);
+  if (ebookCache.size > 200) ebookCache.clear();
+  ebookCache.set(key, { at: Date.now(), results });
+  return results;
 }
 
 /* ---------------- Send-to-Kindle (email) ---------------- */
@@ -507,6 +557,6 @@ module.exports = {
   prowlarrTest, prowlarrSearch,
   absTest, absLibraries, absScan, absLibraryItems,
   notify, notifySend, scoreRelease, pickBestRelease,
-  audibleSearch, searchBooks, googleBooksSearch,
+  audibleSearch, searchBooks, ebookSearch,
   smtpTest, sendToKindle, discover
 };
